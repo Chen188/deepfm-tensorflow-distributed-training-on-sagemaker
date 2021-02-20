@@ -411,7 +411,24 @@ def main(_):
     os.environ['KMP_SETTINGS'] = '1'
     
     #设置intra_op_parallelism_threads为当前VCPU数量来并行单个计算图操作的并行度，设置inter_op_parallelism_threads为没有依赖的多个操作的并行度，多个操作的每个操作如果本身也能并行的话，会共享intra_op_parallelism_threads设置的线程池。inter_op_parallelism_threads设置为0让tensorflow自己来选择合适的多个操作的并行度。
-    config = tf.ConfigProto(device_count={'CPU': num_cpus}, intra_op_parallelism_threads=num_cpus, inter_op_parallelism_threads= num_cpus)
+    if len(FLAGS.hosts) > 1:
+        tf_config = json.loads(os.environ['TF_CONFIG'])
+        print("tf_config is ", tf_config)
+        index = tf_config["task"]["index"]
+        print("index is ", index)
+
+        #每个训练实例都会有一个parameter server进程，所以每个实例都需要一个ps的device filter
+        device_filters = ['/job:ps']
+        if str(tf_config["task"]["type"]) == 'master':
+            device_filters.append('/job:master')
+        else:
+            worker_index = '/job:worker/task:' + str(index)
+            device_filters.append(worker_index)
+
+        config = tf.ConfigProto(allow_soft_placement=True, device_count={'CPU': num_cpus}, intra_op_parallelism_threads=num_cpus, inter_op_parallelism_threads=num_cpus, device_filters=device_filters)
+    else:
+        config = tf.ConfigProto(allow_soft_placement=True, device_count={'CPU': num_cpus}, intra_op_parallelism_threads=num_cpus, inter_op_parallelism_threads=num_cpus)
+
     run_config = tf.estimator.RunConfig().replace(session_config = config)
    
     #在用TF estimator API PS分布式训练的时候，checkpoint保存路径必须是share的比如用S3的路径，否则会报错。
