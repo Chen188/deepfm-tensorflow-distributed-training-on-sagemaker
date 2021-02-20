@@ -111,7 +111,7 @@ def input_fn(filenames, channel='training', batch_size=32, num_epochs=1, perform
         dataset = PipeModeDataset(channel, record_format='TFRecord')
         
     #如果没有使用S3 Shard，则需要在此处对dataset做Shard
-    if FLAGS.enable_s3_shard = False:
+    if FLAGS.enable_s3_shard == False:
         host_rank = FLAGS.hosts.index(FLAGS.current_host)
         number_host = len(FLAGS.hosts)
         dataset = dataset.shard(number_host, host_rank)
@@ -369,20 +369,21 @@ def main(_):
     print('l2_reg ', FLAGS.l2_reg)
 
     #------init Envs------
-    #liangaws: for tfrecord file shishuai need modify
+    #liangaws: for tfrecord file
     if FLAGS.pipe_mode == 0:
-        tr_files = glob.glob("%s/tr*" % FLAGS.training_data_dir)
+        tr_files = glob.glob(r"%s/**/tr*.tfrecords" % FLAGS.training_data_dir, recursive=True)
         random.shuffle(tr_files)
-        print("tr_files:", tr_files)
-        va_files = glob.glob("%s/va*" % FLAGS.val_data_dir)
-        print("va_files:", va_files)
-        te_files = glob.glob("%s/te*" % FLAGS.val_data_dir)
-        print("te_files:", te_files)
+        va_files = glob.glob(r"%s/**/va*.tfrecords" % FLAGS.val_data_dir, recursive=True)
+        te_files = glob.glob(r"%s/**/te*.tfrecords" % FLAGS.val_data_dir, recursive=True)
     else :
         tr_files = ''
         va_files = ''
         te_files = ''
-
+        
+    print("tr_files:", tr_files)
+    print("va_files:", va_files)
+    print("te_files:", te_files)
+    
     #liangaws:这里注释掉调用设置parameter server方式进行分布式训练的环境参数，因为这个训练环境要用Sagemaker来控制。
     #set_dist_env()
 
