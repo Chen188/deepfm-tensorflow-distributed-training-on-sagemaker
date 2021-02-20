@@ -103,37 +103,48 @@ def input_fn(filenames, channel='training', batch_size=32, num_epochs=1, perform
                                      cycle_length=len(filenames), block_length=16,
                                      num_parallel_calls=tf.data.experimental.AUTOTUNE) 
         """
+        # 进入File模式
         #dataset = tf.data.TFRecordDataset(filenames, buffer_size = 16*1024*1024*1024)
         dataset = tf.data.TFRecordDataset(filenames)
-
-        dataset = dataset.batch(batch_size, drop_remainder=True) # Batch size to use
-        dataset = dataset.map(decode_tfrecord,
-                              num_parallel_calls=tf.data.experimental.AUTOTUNE) 
-        
-        #dataset = dataset.map(decode_tfrecord,num_parallel_calls=num_cpus)
-       
-        #dataset = dataset.cache()
-        if num_epochs > 1:
-            dataset = dataset.repeat(num_epochs)
-        dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE) 
-
-        iterator = dataset.make_one_shot_iterator()
-        batch_features, batch_labels = iterator.get_next()
-        return batch_features, batch_labels
-    
     else :
+        #进入Pipe模式
         dataset = PipeModeDataset(channel, record_format='TFRecord')
-        dataset = dataset.batch(batch_size, drop_remainder=True) 
-        dataset = dataset.map(decode_tfrecord,
-                              num_parallel_calls=tf.data.experimental.AUTOTUNE)
-#         dataset = dataset.map(decode_tfrecord,
-#                               num_parallel_calls=num_cpus)
         
-        #dataset = dataset.cache()
-        if num_epochs > 1:
-            dataset = dataset.repeat(num_epochs)
-        dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE) 
-        return dataset
+    #如果没有使用S3 Shard，则需要在此处对dataset做Shard
+    if FLAGS.enable_s3_shard = False:
+        host_rank = FLAGS.hosts.index(FLAGS.current_host)
+        number_host = len(FLAGS.hosts)
+        dataset = dataset.shard(number_host, host_rank)
+    
+    dataset = dataset.batch(batch_size, drop_remainder=True) # Batch size to use
+    dataset = dataset.map(decode_tfrecord,
+                          num_parallel_calls=tf.data.experimental.AUTOTUNE) 
+
+    #dataset = dataset.map(decode_tfrecord,num_parallel_calls=num_cpus)
+
+    #dataset = dataset.cache()
+    if num_epochs > 1:
+        dataset = dataset.repeat(num_epochs)
+    dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE) 
+#     return dataset
+
+    iterator = dataset.make_one_shot_iterator()
+    batch_features, batch_labels = iterator.get_next()
+    return batch_features, batch_labels
+    
+#     else :
+#         dataset = PipeModeDataset(channel, record_format='TFRecord')
+#         dataset = dataset.batch(batch_size, drop_remainder=True) 
+#         dataset = dataset.map(decode_tfrecord,
+#                               num_parallel_calls=tf.data.experimental.AUTOTUNE)
+# #         dataset = dataset.map(decode_tfrecord,
+# #                               num_parallel_calls=num_cpus)
+        
+#         #dataset = dataset.cache()
+#         if num_epochs > 1:
+#             dataset = dataset.repeat(num_epochs)
+#         dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE) 
+#         return dataset
     
 def model_fn(features, labels, mode, params):
     """Bulid Model function f(x) for Estimator."""
