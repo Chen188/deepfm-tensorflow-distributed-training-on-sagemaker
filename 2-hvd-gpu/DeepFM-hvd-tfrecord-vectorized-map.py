@@ -58,19 +58,22 @@ tf.app.flags.DEFINE_string("deep_layers", '256,128,64', "deep layers")
 tf.app.flags.DEFINE_string("dropout", '0.5,0.5,0.5', "dropout rate")
 tf.app.flags.DEFINE_boolean("batch_norm", False, "perform batch normaization (True or False)")
 tf.app.flags.DEFINE_float("batch_norm_decay", 0.9, "decay for the moving average(recommend trying decay=0.9)")
-tf.app.flags.DEFINE_string("data_dir", '', "data dir")
-tf.app.flags.DEFINE_string("dt_dir", '', "data dt partition")
+tf.app.flags.DEFINE_string("training_data_dir", '', "training data dir")
+tf.app.flags.DEFINE_string("val_data_dir", '', "validation data dir")
 tf.app.flags.DEFINE_string("model_dir", '', "model check point dir")
 tf.app.flags.DEFINE_string("servable_model_dir", '', "export servable model for TensorFlow Serving")
 tf.app.flags.DEFINE_string("task_type", 'train', "task type {train, infer, eval, export}")
 tf.app.flags.DEFINE_boolean("clear_existing_model", False, "clear existing model or not")
 
 #liangaws:增加三个参数，一个是checkpointPath，一个是分布式训练需要的所有的主机名以及当前运行该程序的主机名。
-tf.app.flags.DEFINE_string("checkpoinPath", '', "checkpoint path during training ")
 tf.app.flags.DEFINE_list("hosts", json.loads(os.environ.get('SM_HOSTS')), "get the all cluster instances name for distribute training")
 tf.app.flags.DEFINE_string("current_host", os.environ.get('SM_CURRENT_HOST'), "get current execute the program host name")
 tf.app.flags.DEFINE_integer("pipe_mode", 0, "sagemaker data input pipe mode")
 tf.app.flags.DEFINE_integer("worker_per_host", 1, "worker process per training instance")
+tf.app.flags.DEFINE_string("training_channel_name", '', "training channel name for input_fn")
+tf.app.flags.DEFINE_string("evaluation_channel_name", '', "evaluation channel name for input_fn")
+tf.app.flags.DEFINE_boolean("enable_s3_shard", False, "whether enable S3 shard(True or False), this impact whether do dataset shard in input_fn")
+
 #end of liangaws
 
 #1 1:0.5 2:0.03519 3:1 4:0.02567 7:0.03708 8:0.01705 9:0.06296 10:0.18185 11:0.02497 12:1 14:0.02565 15:0.03267 17:0.0247 18:0.03158 20:1 22:1 23:0.13169 24:0.02933 27:0.18159 31:0.0177 34:0.02888 38:1 51:1 63:1 132:1 164:1 236:1
@@ -99,26 +102,14 @@ def input_fn(filenames='', channel='training', batch_size=32, num_epochs=1, perf
     # Extract lines from input files using the Dataset API, can pass one filename or filename list
     if FLAGS.pipe_mode == 0:
         dataset = tf.data.TFRecordDataset(filenames) 
-        #liangaws: 这里假设Sagemaker用的是S3fullreplicate，也就是sagemaker会把每个channle的数据都在每个训练实例上复制一份。所在这里直接基于每个worker的rank来做shard。
-        dataset = dataset.shard(hvd.size(), hvd.rank())
-                    
-        if perform_shuffle:
-            dataset = dataset.shuffle(buffer_size=1024*1024)
-        
-        dataset = dataset.batch(batch_size, drop_remainder=True) 
-        dataset = dataset.map(decode_tfrecord,
-                            num_parallel_calls=tf.data.experimental.AUTOTUNE)    
-        dataset = dataset.cache()
-                
-        if num_epochs > 1:
-            dataset = dataset.repeat(num_epochs)
-               
-        dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
-        
-        iterator = dataset.make_one_shot_iterator()
-        batch_features, batch_labels = iterator.get_next()
-        
-        return batch_features, batch_labels
+
+        if FLAGS.enable_s3_shard : #S3fullreplicate
+            dataset = dataset.shard(FLAGS.worker_per_host, hvd.local_rank())
+        else : #ShardedByS3Key
+            dataset = dataset.shard(hvd.size(), hvd.rank())
+                  
+#         if perform_shuffle: 
+#             dataset = dataset.shuffle(buffer_size=1024*1024)
     
     else :
         print("-------enter into pipe mode branch!------------")
@@ -131,20 +122,22 @@ def input_fn(filenames='', channel='training', batch_size=32, num_epochs=1, perf
             index = hvd.rank() // FLAGS.worker_per_host
             dataset = dataset.shard(number_host, index)
             
-        dataset = dataset.batch(batch_size, drop_remainder=True) # Batch size to use
-        dataset = dataset.map(decode_tfrecord,
-                            num_parallel_calls=tf.data.experimental.AUTOTUNE)
-        dataset = dataset.cache()
-        
-        if num_epochs > 1:
-            dataset = dataset.repeat(num_epochs)
-                   
-        dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
-        
-        return dataset
-   
+    dataset = dataset.batch(batch_size, drop_remainder=True) # Batch size to use
+    dataset = dataset.map(decode_tfrecord,
+                        num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    dataset = dataset.cache() # shishuai ??
 
+    if num_epochs > 1:
+        dataset = dataset.repeat(num_epochs)
 
+    dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
+
+#     return dataset
+    iterator = dataset.make_one_shot_iterator()
+    batch_features, batch_labels = iterator.get_next()
+
+    return batch_features, batch_labels
+    
 def model_fn(features, labels, mode, params):
     """Bulid Model function f(x) for Estimator."""
     #------hyperparameters----
@@ -294,53 +287,6 @@ def batch_norm_layer(x, train_phase, scope_bn):
     z = tf.cond(tf.cast(train_phase, tf.bool), lambda: bn_train, lambda: bn_infer)
     return z
 
-def set_dist_env():
-    if FLAGS.dist_mode == 1:        # 本地分布式测试模式1 chief, 1 ps, 1 evaluator
-        ps_hosts = FLAGS.ps_hosts.split(',')
-        chief_hosts = FLAGS.chief_hosts.split(',')
-        task_index = FLAGS.task_index
-        job_name = FLAGS.job_name
-        print('ps_host', ps_hosts)
-        print('chief_hosts', chief_hosts)
-        print('job_name', job_name)
-        print('task_index', str(task_index))
-        # 无worker参数
-        tf_config = {
-            'cluster': {'chief': chief_hosts, 'ps': ps_hosts},
-            'task': {'type': job_name, 'index': task_index }
-        }
-        print(json.dumps(tf_config))
-        os.environ['TF_CONFIG'] = json.dumps(tf_config)
-    elif FLAGS.dist_mode == 2:      # 集群分布式模式
-        ps_hosts = FLAGS.ps_hosts.split(',')
-        worker_hosts = FLAGS.worker_hosts.split(',')
-        chief_hosts = worker_hosts[0:1] # get first worker as chief
-        worker_hosts = worker_hosts[2:] # the rest as worker
-        task_index = FLAGS.task_index
-        job_name = FLAGS.job_name
-        print('ps_host', ps_hosts)
-        print('worker_host', worker_hosts)
-        print('chief_hosts', chief_hosts)
-        print('job_name', job_name)
-        print('task_index', str(task_index))
-        # use #worker=0 as chief
-        if job_name == "worker" and task_index == 0:
-            job_name = "chief"
-        # use #worker=1 as evaluator
-        if job_name == "worker" and task_index == 1:
-            job_name = 'evaluator'
-            task_index = 0
-        # the others as worker
-        if job_name == "worker" and task_index > 1:
-            task_index -= 2
-
-        tf_config = {
-            'cluster': {'chief': chief_hosts, 'worker': worker_hosts, 'ps': ps_hosts},
-            'task': {'type': job_name, 'index': task_index }
-        }
-        print(json.dumps(tf_config))
-        os.environ['TF_CONFIG'] = json.dumps(tf_config)
-
 def main(_):
     #liangaws:测试sagemaker传入python程序的参数。
     import sys
@@ -350,15 +296,10 @@ def main(_):
     hvd.init()
     
     #------check Arguments------
-    if FLAGS.dt_dir == "":
-        FLAGS.dt_dir = (date.today() + timedelta(-1)).strftime('%Y%m%d')
-    #FLAGS.model_dir = FLAGS.model_dir + FLAGS.dt_dir
-    #FLAGS.data_dir  = FLAGS.data_dir + FLAGS.dt_dir
-
     print('task_type ', FLAGS.task_type)
     print('model_dir ', FLAGS.model_dir)
-    print('data_dir ', FLAGS.data_dir)
-    print('dt_dir ', FLAGS.dt_dir)
+    print('training_data_dir ', FLAGS.training_data_dir)
+    print('val_data_dir ', FLAGS.val_data_dir)
     print('num_epochs ', FLAGS.num_epochs)
     print('feature_size ', FLAGS.feature_size)
     print('field_size ', FLAGS.field_size)
@@ -376,12 +317,19 @@ def main(_):
     #------init Envs------
     #liangaws: 这里利用glob.glob函数可以把data_dir目录下的所有训练文件名抽取出来组成一个list，之后可以直接把这个文件名list传给TextLineDataset。 
     #for tfrecord file
-    tr_files = glob.glob("%s/tr*" % FLAGS.data_dir)
-    random.shuffle(tr_files)
+    #liangaws: for tfrecord file
+    if FLAGS.pipe_mode == 0:
+        tr_files = glob.glob(r"%s/**/tr*.tfrecords" % FLAGS.training_data_dir, recursive=True)
+        random.shuffle(tr_files)
+        va_files = glob.glob(r"%s/**/va*.tfrecords" % FLAGS.val_data_dir, recursive=True)
+        te_files = glob.glob(r"%s/**/te*.tfrecords" % FLAGS.val_data_dir, recursive=True)
+    else :
+        tr_files = ''
+        va_files = ''
+        te_files = ''
+        
     print("tr_files:", tr_files)
-    va_files = glob.glob("%s/va*" % FLAGS.data_dir)
     print("va_files:", va_files)
-    te_files = glob.glob("%s/te*" % FLAGS.data_dir)
     print("te_files:", te_files)
     
     
@@ -393,8 +341,6 @@ def main(_):
         else:
             print("existing model cleaned at %s" % FLAGS.model_dir)
 
-    #liangaws:这里注释掉调用设置parameter server方式进行分布式训练的环境参数，因为这个训练环境要用Sagemaker来控制。
-    #set_dist_env()
 
     #------bulid Tasks------
     model_params = {
@@ -407,26 +353,11 @@ def main(_):
         "deep_layers": FLAGS.deep_layers,
         "dropout": FLAGS.dropout
     }
-    
-  
-    #liangaws:设置checkpoint的周期和最大数量
-    #config = tf.estimator.RunConfig().replace(save_checkpoints_secs = 5,
-    #                                          keep_checkpoint_max = 5, #log_step_count_steps=FLAGS.log_steps, save_summary_steps=FLAGS.log_steps)
 
-    #liangaws: 使用Horovod， pin GPU to be used to process local rank (one GPU per process)
-    
-    
+    #liangaws: 使用Horovod， pin GPU to be used to process local rank (one GPU per process)    
     config = tf.ConfigProto()
     config.gpu_options.allow_growth = True
     config.gpu_options.visible_device_list = str(hvd.local_rank())
-    
-    num_cpus = int(os.environ['SM_NUM_CPUS'])
-    config.device_count['CPU']=num_cpus
-    config.intra_op_parallelism_threads=num_cpus
-    config.inter_op_parallelism_threads=num_cpus
-    #测试TF XLA效果
-    #config.graph_options.optimizer_options.global_jit_level = tf.OptimizerOptions.ON_1
-    
        
     # liangaws: 使用Horovod的时候， save checkpoints only on worker 0 to prevent other workers from corrupting them.
     print('current horovod rank is ', hvd.rank())
@@ -483,7 +414,7 @@ def main(_):
         DeepFM.evaluate(input_fn=lambda: input_fn(va_files, num_epochs=1, batch_size=FLAGS.batch_size))
     elif FLAGS.task_type == 'infer':
         preds = DeepFM.predict(input_fn=lambda: input_fn(te_files, num_epochs=1, batch_size=FLAGS.batch_size), predict_keys="prob")
-        with open(FLAGS.data_dir+"/pred.txt", "w") as fo:
+        with open(FLAGS.val_data_dir+"/pred.txt", "w") as fo:
             for prob in preds:
                 fo.write("%f\n" % (prob['prob']))
     #liangaws:这里修改当任务类型是train或者export的时候都保存模型
