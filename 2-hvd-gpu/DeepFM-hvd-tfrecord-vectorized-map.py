@@ -38,12 +38,6 @@ from tensorflow.contrib.data import map_and_batch
 
 #################### CMD Arguments ####################
 FLAGS = tf.app.flags.FLAGS
-tf.app.flags.DEFINE_integer("dist_mode", 0, "distribuion mode {0-loacal, 1-single_dist, 2-multi_dist}")
-tf.app.flags.DEFINE_string("ps_hosts", '', "Comma-separated list of hostname:port pairs")
-tf.app.flags.DEFINE_string("worker_hosts", '', "Comma-separated list of hostname:port pairs")
-tf.app.flags.DEFINE_string("job_name", '', "One of 'ps', 'worker'")
-tf.app.flags.DEFINE_integer("task_index", 0, "Index of task within the job")
-tf.app.flags.DEFINE_integer("num_threads", 16, "Number of threads")
 tf.app.flags.DEFINE_integer("feature_size", 0, "Number of features")
 tf.app.flags.DEFINE_integer("field_size", 0, "Number of fields")
 tf.app.flags.DEFINE_integer("embedding_size", 32, "Embedding size")
@@ -60,12 +54,11 @@ tf.app.flags.DEFINE_boolean("batch_norm", False, "perform batch normaization (Tr
 tf.app.flags.DEFINE_float("batch_norm_decay", 0.9, "decay for the moving average(recommend trying decay=0.9)")
 tf.app.flags.DEFINE_string("training_data_dir", '', "training data dir")
 tf.app.flags.DEFINE_string("val_data_dir", '', "validation data dir")
-tf.app.flags.DEFINE_string("model_dir", '', "model check point dir")
+tf.app.flags.DEFINE_string("model_dir", '', "model checkpoint dir")
 tf.app.flags.DEFINE_string("servable_model_dir", '', "export servable model for TensorFlow Serving")
 tf.app.flags.DEFINE_string("task_type", 'train', "task type {train, infer, eval, export}")
 tf.app.flags.DEFINE_boolean("clear_existing_model", False, "clear existing model or not")
 
-#liangaws:增加三个参数，一个是checkpointPath，一个是分布式训练需要的所有的主机名以及当前运行该程序的主机名。
 tf.app.flags.DEFINE_list("hosts", json.loads(os.environ.get('SM_HOSTS')), "get the all cluster instances name for distribute training")
 tf.app.flags.DEFINE_string("current_host", os.environ.get('SM_CURRENT_HOST'), "get current execute the program host name")
 tf.app.flags.DEFINE_integer("pipe_mode", 0, "sagemaker data input pipe mode")
@@ -73,18 +66,16 @@ tf.app.flags.DEFINE_integer("worker_per_host", 1, "worker process per training i
 tf.app.flags.DEFINE_string("training_channel_name", '', "training channel name for input_fn")
 tf.app.flags.DEFINE_string("evaluation_channel_name", '', "evaluation channel name for input_fn")
 tf.app.flags.DEFINE_boolean("enable_s3_shard", False, "whether enable S3 shard(True or False), this impact whether do dataset shard in input_fn")
+tf.app.flags.DEFINE_boolean("enable_data_multi_path", False, "whether use different dataset path for each channel, this impact how to do dataset shard(ONLY apply for Pipe mode) in input_fn")
 
 #end of liangaws
 
 #1 1:0.5 2:0.03519 3:1 4:0.02567 7:0.03708 8:0.01705 9:0.06296 10:0.18185 11:0.02497 12:1 14:0.02565 15:0.03267 17:0.0247 18:0.03158 20:1 22:1 23:0.13169 24:0.02933 27:0.18159 31:0.0177 34:0.02888 38:1 51:1 63:1 132:1 164:1 236:1
 #liangaws: 为了使用sagemaker的pipe mode，给input_fn增加了一个channel参数
 def input_fn(filenames='', channel='training', batch_size=32, num_epochs=1, perform_shuffle=False):
-    #print('Parsing', filenames)
     
     def decode_tfrecord(batch_examples):
         # The feature definition here should BE consistent with LibSVM TO TFRecord process.
-        batch_size = batch_examples[0].shape
-        print("batch_examples first dimension(batch size) is ", batch_examples[0].shape)
         features = tf.parse_example(batch_examples,
                                            features={
                                                "label": tf.FixedLenFeature([], tf.float32),
@@ -97,34 +88,42 @@ def input_fn(filenames='', channel='training', batch_size=32, num_epochs=1, perf
         batch_values = features["values"]
         
         return {"feat_ids": batch_ids, "feat_vals": batch_values}, batch_label
-         
-       
+
     # Extract lines from input files using the Dataset API, can pass one filename or filename list
     if FLAGS.pipe_mode == 0:
         dataset = tf.data.TFRecordDataset(filenames) 
 
-        if FLAGS.enable_s3_shard : #S3fullreplicate
+        if FLAGS.enable_s3_shard : #ShardedByS3Key
             dataset = dataset.shard(FLAGS.worker_per_host, hvd.local_rank())
-        else : #ShardedByS3Key
+        else : #S3FullReplicate
             dataset = dataset.shard(hvd.size(), hvd.rank())
                   
-#         if perform_shuffle: 
+#         if perform_shuffle:  #shishuai ?? 
 #             dataset = dataset.shuffle(buffer_size=1024*1024)
     
     else :
         print("-------enter into pipe mode branch!------------")
         dataset = PipeModeDataset(channel, record_format='TFRecord')
+        
         number_host = len(FLAGS.hosts)
         #liangaws: horovod + pipe mode下，如果每个训练实例有多个worker，需要每个worker对应一个不同的channel，因此建议每个channel中的数据集是提前经过切分好的。只要在多个训练实例上并且每个训练实例是多个worker进程的情况下，才需要对不同训练实例上的同一个channel的数据做shard。
-        if number_host > 1:
-            #liangaws: 在Sagemaker horovod方式下，不同训练实例的current-host都是一样的，而sagemaker PS方式下，不同训练实例的current-host是不一样的。
-            #index = FLAGS.hosts.index(FLAGS.current_host)
-            index = hvd.rank() // FLAGS.worker_per_host
-            dataset = dataset.shard(number_host, index)
-            
+        
+        if FLAGS.enable_data_multi_path : 
+            if FLAGS.enable_s3_shard == False :
+                if number_host > 1:
+                    #liangaws: 在Sagemaker horovod方式下，不同训练实例的current-host都是一样的
+                    index = hvd.rank() // FLAGS.worker_per_host
+                    dataset = dataset.shard(number_host, index)
+        else :
+            if FLAGS.enable_s3_shard :
+                dataset = dataset.shard(FLAGS.worker_per_host, hvd.local_rank())
+            else :
+                dataset = dataset.shard(hvd.size(), hvd.rank())
+     
     dataset = dataset.batch(batch_size, drop_remainder=True) # Batch size to use
     dataset = dataset.map(decode_tfrecord,
                         num_parallel_calls=tf.data.experimental.AUTOTUNE)
+    
     dataset = dataset.cache() # shishuai ??
 
     if num_epochs > 1:
@@ -132,11 +131,13 @@ def input_fn(filenames='', channel='training', batch_size=32, num_epochs=1, perf
 
     dataset = dataset.prefetch(buffer_size=tf.data.experimental.AUTOTUNE)
 
-#     return dataset
-    iterator = dataset.make_one_shot_iterator()
-    batch_features, batch_labels = iterator.get_next()
+    return dataset
 
-    return batch_features, batch_labels
+#shishaui ??
+#     iterator = dataset.make_one_shot_iterator() 
+#     batch_features, batch_labels = iterator.get_next()
+
+#     return batch_features, batch_labels
     
 def model_fn(features, labels, mode, params):
     """Bulid Model function f(x) for Estimator."""
@@ -263,7 +264,6 @@ def model_fn(features, labels, mode, params):
     train_op = optimizer.minimize(loss, global_step=tf.train.get_global_step())
     
     #train_op = optimizer.minimize(loss, global_step=tf.train.get_or_create_global_step())
-
          
     # Provide an estimator spec for `ModeKeys.TRAIN` modes
     if mode == tf.estimator.ModeKeys.TRAIN:
@@ -331,8 +331,7 @@ def main(_):
     print("tr_files:", tr_files)
     print("va_files:", va_files)
     print("te_files:", te_files)
-    
-    
+       
     if FLAGS.clear_existing_model:
         try:
             shutil.rmtree(FLAGS.model_dir)
@@ -340,7 +339,6 @@ def main(_):
             print(e, "at clear_existing_model")
         else:
             print("existing model cleaned at %s" % FLAGS.model_dir)
-
 
     #------bulid Tasks------
     model_params = {
@@ -393,7 +391,7 @@ def main(_):
         
         """
         if FLAGS.pipe_mode == 0: #file mode
-            for _ in range(FLAGS.num_epochs):
+            for _ in range(FLAGS.num_epochs): # shishuai ??
                 DeepFM.train(input_fn=lambda: input_fn(tr_files, num_epochs=1, batch_size=FLAGS.batch_size), hooks=[bcast_hook])
                 if hvd.rank() == 0:  #只需要在horovod的master做模型评估
                     DeepFM.evaluate(input_fn=lambda: input_fn(va_files, num_epochs=1, batch_size=FLAGS.batch_size))
