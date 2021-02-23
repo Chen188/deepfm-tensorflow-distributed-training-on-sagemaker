@@ -54,11 +54,10 @@ tf.app.flags.DEFINE_boolean("batch_norm", False, "perform batch normaization (Tr
 tf.app.flags.DEFINE_float("batch_norm_decay", 0.9, "decay for the moving average(recommend trying decay=0.9)")
 tf.app.flags.DEFINE_string("training_data_dir", '', "training data dir")
 tf.app.flags.DEFINE_string("val_data_dir", '', "validation data dir")
-tf.app.flags.DEFINE_string("model_dir", '', "model checkpoint dir")
+tf.app.flags.DEFINE_string("checkpoint_dir", '', "local checkpoint dir")
 tf.app.flags.DEFINE_string("servable_model_dir", '', "export servable model for TensorFlow Serving")
 tf.app.flags.DEFINE_string("task_type", 'train', "task type {train, infer, eval, export}")
 tf.app.flags.DEFINE_boolean("clear_existing_model", False, "clear existing model or not")
-
 tf.app.flags.DEFINE_list("hosts", json.loads(os.environ.get('SM_HOSTS')), "get the all cluster instances name for distribute training")
 tf.app.flags.DEFINE_string("current_host", os.environ.get('SM_CURRENT_HOST'), "get current execute the program host name")
 tf.app.flags.DEFINE_integer("pipe_mode", 0, "sagemaker data input pipe mode")
@@ -98,7 +97,7 @@ def input_fn(filenames='', channel='training', batch_size=32, num_epochs=1, perf
         else : #S3FullReplicate
             dataset = dataset.shard(hvd.size(), hvd.rank())
                   
-#         if perform_shuffle:  #shishuai ?? 
+#         if perform_shuffle:
 #             dataset = dataset.shuffle(buffer_size=1024*1024)
     
     else :
@@ -124,7 +123,7 @@ def input_fn(filenames='', channel='training', batch_size=32, num_epochs=1, perf
     dataset = dataset.map(decode_tfrecord,
                         num_parallel_calls=tf.data.experimental.AUTOTUNE)
     
-    dataset = dataset.cache() # shishuai ??
+#     dataset = dataset.cache()
 
     if num_epochs > 1:
         dataset = dataset.repeat(num_epochs)
@@ -133,7 +132,7 @@ def input_fn(filenames='', channel='training', batch_size=32, num_epochs=1, perf
 
     return dataset
 
-#shishaui ??
+# in hvd, if use batch labels would get error, so we comment below code
 #     iterator = dataset.make_one_shot_iterator() 
 #     batch_features, batch_labels = iterator.get_next()
 
@@ -297,7 +296,7 @@ def main(_):
     
     #------check Arguments------
     print('task_type ', FLAGS.task_type)
-    print('model_dir ', FLAGS.model_dir)
+    print('checkpoint_dir ', FLAGS.checkpoint_dir)
     print('training_data_dir ', FLAGS.training_data_dir)
     print('val_data_dir ', FLAGS.val_data_dir)
     print('num_epochs ', FLAGS.num_epochs)
@@ -334,11 +333,11 @@ def main(_):
        
     if FLAGS.clear_existing_model:
         try:
-            shutil.rmtree(FLAGS.model_dir)
+            shutil.rmtree(FLAGS.checkpoint_dir)
         except Exception as e:
             print(e, "at clear_existing_model")
         else:
-            print("existing model cleaned at %s" % FLAGS.model_dir)
+            print("existing model cleaned at %s" % FLAGS.checkpoint_dir)
 
     #------bulid Tasks------
     model_params = {
@@ -358,15 +357,13 @@ def main(_):
     config.gpu_options.visible_device_list = str(hvd.local_rank())
        
     # liangaws: 使用Horovod的时候， save checkpoints only on worker 0 to prevent other workers from corrupting them.
-    print('current horovod rank is ', hvd.rank())
-    print('input model dir is ', FLAGS.model_dir)
-    
+    print('current horovod rank is ', hvd.rank())   
     print("host is ", FLAGS.hosts)
     print('current host is ', FLAGS.current_host)
     
     
     if hvd.rank() == 0:
-        DeepFM = tf.estimator.Estimator(model_fn=model_fn, model_dir=FLAGS.model_dir, params=model_params, config=tf.estimator.RunConfig().replace(session_config=config))
+        DeepFM = tf.estimator.Estimator(model_fn=model_fn, model_dir=FLAGS.checkpoint_dir, params=model_params, config=tf.estimator.RunConfig().replace(session_config=config))
     else:
         DeepFM = tf.estimator.Estimator(model_fn=model_fn, model_dir=None, params=model_params, config=tf.estimator.RunConfig().replace(session_config=config))
     
@@ -391,7 +388,7 @@ def main(_):
         
         """
         if FLAGS.pipe_mode == 0: #file mode
-            for _ in range(FLAGS.num_epochs): # shishuai ??
+            for _ in range(FLAGS.num_epochs):
                 DeepFM.train(input_fn=lambda: input_fn(tr_files, num_epochs=1, batch_size=FLAGS.batch_size), hooks=[bcast_hook])
                 if hvd.rank() == 0:  #只需要在horovod的master做模型评估
                     DeepFM.evaluate(input_fn=lambda: input_fn(va_files, num_epochs=1, batch_size=FLAGS.batch_size))
@@ -406,8 +403,7 @@ def main(_):
             DeepFM.train(input_fn=lambda: input_fn(channel=channel_names[1 + hvd.local_rank()], num_epochs=FLAGS.num_epochs, batch_size=FLAGS.batch_size), hooks=[bcast_hook])
             if hvd.rank() == 0:  #只需要在horovod的master做模型评估
                 DeepFM.evaluate(input_fn=lambda: input_fn(channel=eval_channel, num_epochs=1, batch_size=FLAGS.batch_size))
-            
-        
+
     elif FLAGS.task_type == 'eval':
         DeepFM.evaluate(input_fn=lambda: input_fn(va_files, num_epochs=1, batch_size=FLAGS.batch_size))
     elif FLAGS.task_type == 'infer':
