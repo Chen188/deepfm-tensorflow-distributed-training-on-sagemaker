@@ -40,25 +40,25 @@
   修改完了之后，在训练的时候一定要调用 **tf.estimator.train_and_evaluate(self.model, train_spec, eval_spec)** API，如果调用**tf.estimator.train** API的话，会在开始训练的时候就一直卡住（这也是 TF 的 known issue）。
 
 ```python
-    if len(FLAGS.hosts) > 1:
-        tf_config = json.loads(os.environ['TF_CONFIG'])
-        print("tf_config is ", tf_config)
-        index = tf_config["task"]["index"]
-        print("index is ", index)
+if len(FLAGS.hosts) > 1:
+    tf_config = json.loads(os.environ['TF_CONFIG'])
+    print("tf_config is ", tf_config)
+    index = tf_config["task"]["index"]
+    print("index is ", index)
 
-        #每个训练实例都会有一个parameter server进程，所以每个实例都需要一个ps的device filter
-        device_filters = ['/job:ps']
-        if str(tf_config["task"]["type"]) == 'master':
-            device_filters.append('/job:master')
-        else:
-            worker_index = '/job:worker/task:' + str(index)
-            device_filters.append(worker_index)
-
-        config = tf.ConfigProto(allow_soft_placement=True, device_count={'CPU': num_cpus}, intra_op_parallelism_threads=num_cpus, inter_op_parallelism_threads=num_cpus, device_filters=device_filters)
+    #每个训练实例都会有一个parameter server进程，所以每个实例都需要一个ps的device filter
+    device_filters = ['/job:ps']
+    if str(tf_config["task"]["type"]) == 'master':
+        device_filters.append('/job:master')
     else:
-        config = tf.ConfigProto(allow_soft_placement=True, device_count={'CPU': num_cpus}, intra_op_parallelism_threads=num_cpus, inter_op_parallelism_threads=num_cpus)
+        worker_index = '/job:worker/task:' + str(index)
+        device_filters.append(worker_index)
 
-    run_config = tf.estimator.RunConfig().replace(session_config = config)
+    config = tf.ConfigProto(allow_soft_placement=True, device_count={'CPU': num_cpus}, intra_op_parallelism_threads=num_cpus, inter_op_parallelism_threads=num_cpus, device_filters=device_filters)
+else:
+    config = tf.ConfigProto(allow_soft_placement=True, device_count={'CPU': num_cpus}, intra_op_parallelism_threads=num_cpus, inter_op_parallelism_threads=num_cpus)
+
+run_config = tf.estimator.RunConfig().replace(session_config = config)
 ```
 
 - model_dir 是一个S3路径（每次启动训练时用不同的路径以使模型从0开始训练，在helper code中我们在S3路径上加了一个时间戳的后缀），用于 TF 保存checkpoint，TF在PS模式下，需要一个共享存储来保存ckpt。通常训练开始时，master worker初始化模型参数，然后传给PS，其他worker从PS中获取模型参数（通常晚于master worker 5s开始），开始训练。
