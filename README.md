@@ -35,7 +35,7 @@
 
 - Python脚本中，我们有如下一段代码：
 
-  该代码的用途是在多个主机的时候，需要在algo-1主机（master主机）上面设置**device_filters**，并用于 tf.ConfigProto() 中，否则的话会出现模型训练完成时，master worker做完eval之后会一直hang住，而non master worker这个时候是训练完毕的状态。
+  该代码的用途是在多个主机的时候，需要在每个主机上面设置**device_filters**，并用于 tf.ConfigProto() 中，否则的话会出现模型训练完成时，master worker做完eval之后会一直hang住，而non master worker这个时候是训练完毕的状态。
 
   修改完了之后，在训练的时候一定要调用 **tf.estimator.train_and_evaluate(self.model, train_spec, eval_spec)** API，如果调用**tf.estimator.train** API的话，会在开始训练的时候就一直卡住（这也是 TF 的 known issue）。
 
