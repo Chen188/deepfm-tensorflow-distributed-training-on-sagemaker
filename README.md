@@ -101,14 +101,14 @@ dataset = PipeModeDataset(channel, record_format='TFRecord')
 number_host = len(FLAGS.hosts)
 if FLAGS.enable_data_multi_path : 
     if FLAGS.enable_s3_shard == False :
-      	if number_host > 1:
-        	index = hvd.rank() // FLAGS.worker_per_host
-        	dataset = dataset.shard(number_host, index)
+        if number_host > 1:
+            index = hvd.rank() // FLAGS.worker_per_host
+            dataset = dataset.shard(number_host, index)
 else :
     if FLAGS.enable_s3_shard :
-				dataset = dataset.shard(FLAGS.worker_per_host, hvd.local_rank())
-		else :
-				dataset = dataset.shard(hvd.size(), hvd.rank())
+        dataset = dataset.shard(FLAGS.worker_per_host, hvd.local_rank())
+else :
+    dataset = dataset.shard(hvd.size(), hvd.rank())
 ```
 
 
