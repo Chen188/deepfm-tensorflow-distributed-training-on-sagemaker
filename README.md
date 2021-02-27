@@ -79,7 +79,7 @@ estimator.fit(inputs)
 
 - 为了在Sagemaker pipe mode下使用horovod的单机多个worker进程，需要在调用Sagemaker的estimator fit的时候用多个channel，至少单机的每个worker需要一个channel。在该示例中，我们使用 ml.p3.8xlarge实例，该实例有4块V100的卡，在使用PIPE模式时，需要注意在helper code中需要创建4个channel。
 
-- 从SM设置的环境变量SM_CHANNELS可以获得当前的所有channel名字，之后每个worker用单独的channel来进行数据读取。这里channel名字的顺序与调用Sagemaker estimator fit时候写入的顺序是不同的。比如对于**{'training':train_s3, 'training-2':train2_s3, 'evaluation': validate_s3}**这样的三个channel，环境变量被SM设置为**['evaluation', 'training', 'training-2']**，也就是说最后一个channel 'evaluation'出现在环境变量SM_CHANNELS中的第一个，其他channel则是按照原来顺序排列。（怀疑是按首字母排序的）
+- 从SM设置的环境变量SM_CHANNELS可以获得当前的所有channel名字，之后每个worker用单独的channel来进行数据读取。这里channel名字的顺序与调用Sagemaker estimator fit时候写入的顺序是不同的。比如对于**{'training':train_s3, 'training-2':train2_s3, 'evaluation': validate_s3}**这样的三个channel，环境变量被SM设置为**['evaluation', 'training', 'training-2']**，也就是说最后一个channel 'evaluation'出现在环境变量SM_CHANNELS中的第一个，其他channel则是按照原来顺序排列。
 
 - 关于Channel，一个主机上面每个worker一个channel（至少一个），同一个channel不能被同一个主机上不同worker使用，但是可以被其他主机上的worker使用。
 
@@ -115,4 +115,4 @@ else :
 
 #### 推荐阅读
 
-在**docs** 目录中，上传了我的同事梁宇辉总结的TensorFlow训练调优，推荐大家阅读。
+在**docs** 目录中，上传了我的同事**梁宇辉**总结的TensorFlow训练调优，推荐大家阅读。
