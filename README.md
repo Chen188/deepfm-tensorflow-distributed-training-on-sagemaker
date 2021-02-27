@@ -11,7 +11,7 @@
 
 训练数据格式为 TFRecord，关于如何从 libsvm转为 tfrecord可以参考 **tools** 目录下的脚本。
 
-#### Parameter Server CPU
+### Parameter Server CPU
 
 - 在SageMaker TF Parameter Server（简称PS）模式下，每个训练实例上会有一个进程用于parameter server，每个实例上有一个worker，并且应用的PS异步模式的；
 
@@ -63,7 +63,7 @@ run_config = tf.estimator.RunConfig().replace(session_config = config)
 
 - model_dir 是一个S3路径（每次启动训练时用不同的路径以使模型从0开始训练，在helper code中我们在S3路径上加了一个时间戳的后缀），用于 TF 保存checkpoint，TF在PS模式下，需要一个共享存储来保存ckpt。通常训练开始时，master worker初始化模型参数，然后传给PS，其他worker从PS中获取模型参数（通常晚于master worker 5s开始），开始训练。
 
-#### SageMaker inputs S3 Shard功能
+### SageMaker inputs S3 Shard功能
 
 SageMaker中提供了S3侧对数据Shard的功能，使用时，将会基于文件名前缀做Shard（基于主机数量），这个Shard是按文件级别的，因此是文件数量需要被主机数量整除，同时每个文件中样本数量需要一致。这会带来数据准备阶段的开销，如果不在此处启用Shard，则数据集会被FULL下载到训练实例中，就需要在代码中根据情况做Shard（如 dataset.shard(数据分多少份，当前worker拿第几份)）。当单个主机上有多个worker的时候，即使在S3侧做了Shard，还需要在代码中进一步Shard，S3侧Shard只是按主机数量进行Shard，而不是worker数量。
 
@@ -75,7 +75,7 @@ inputs = {'training' : train_input}
 estimator.fit(inputs)
 ```
 
-#### Horovod GPU
+### Horovod GPU
 
 - 为了在Sagemaker pipe mode下使用horovod的单机多个worker进程，需要在调用Sagemaker的estimator fit的时候用多个channel，至少单机的每个worker需要一个channel。在该示例中，我们使用 ml.p3.8xlarge实例，该实例有4块V100的卡，在使用PIPE模式时，需要注意在helper code中需要创建4个channel。
 
@@ -113,6 +113,6 @@ else :
 
 
 
-#### 推荐阅读
+## 推荐阅读
 
 在**docs** 目录中，上传了我的同事**梁宇辉**总结的TensorFlow训练调优，推荐大家阅读。

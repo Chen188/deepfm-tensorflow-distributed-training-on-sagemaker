@@ -9,7 +9,7 @@ In this demo, we show two samples about deepfm distributed training on Amazon Sa
 
 The training dataset format is TFRecord, you could refer to the script under **tools** to convert libsvm to tfrecord.
 
-#### Parameter Server CPU
+### Parameter Server CPU
 
 - In SageMaker TF Parameter Server (PS for short) mode，each instance will have a parameter server process, each instance has one worker, the PS is async mode.
 
@@ -61,7 +61,7 @@ run_config = tf.estimator.RunConfig().replace(session_config = config)
 
 - model_dir is an S3 path (each time you start training, use a different path to make the model start training from 0. In the helper code, we add a timestamp suffix to the S3 path), used for TF to save checkpoint. When use TF in PS mode, a shared storage is needed to save ckpt. Usually at the beginning of training, the master worker initializes the model parameters and then passes them to the PS, and the other workers obtain the model parameters from the PS (usually starting later than the master worker 5 seconds) and start training.
 
-#### SageMaker inputs S3 Shard
+### SageMaker inputs S3 Shard
 
 SageMaker provides the data shard feature on the S3 side. When using it, the shard will be based on the file name prefix (based on the number of hosts). This shard is based on the file level, so the number of files needs to be evenly divided by the number of hosts. The number of samples in each file needs to be consistent. This will bring the overhead of the data preparation stage. If the Shard is not enabled here, the dataset will be FULL downloaded to the training instances. You need to make the Shard in the code according to the situation (such as **dataset.shard (the num of data need to be divided, the index of dataset that the current worker to take)**). When there are multiple workers on a single host, even if shards are made on the S3 side, further shards are required in the code. Shards on the S3 side only shards according to the number of hosts, not the number of workers.
 
@@ -73,7 +73,7 @@ inputs = {'training' : train_input}
 estimator.fit(inputs)
 ```
 
-#### Horovod GPU
+### Horovod GPU
 
 - In order to use horovod on single host multiple worker with Sagemaker pipe mode, you need to use multiple channels when calling Sagemaker estimator fit, each worker on a single host need at least one channel. In this example, we use the ml.p3.8xlarge instance for example, it has 4 V100 GPU cards. When using the PIPE mode, we need to set 4 channels in the helper code.
 
@@ -109,6 +109,6 @@ else :
 
 
 
-#### Recommended reading
+## Recommended reading
 
 In the **docs** directory, I uploaded the TensorFlow training and tuning summarized by my colleague **Yuhui Liang**, and I recommend you to read it.
