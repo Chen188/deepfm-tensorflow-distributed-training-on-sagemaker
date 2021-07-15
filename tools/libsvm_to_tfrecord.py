@@ -1,7 +1,6 @@
 import os
 import numpy as np
 import tensorflow as tf
- 
 
 def convert_tfrecords(input_filename, output_filename):
     """Concert the LibSVM contents to TFRecord.
